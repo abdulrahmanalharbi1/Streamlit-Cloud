@@ -2,7 +2,7 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                         Trading Dashboard                                      ║
 ║                       داش بورد توصيات التداول                                   ║
-║                           Version 2.0                                          ║
+║                           Version 3.0                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -12,7 +12,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import ta
 import requests
-import time
+import json
+import os
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -38,6 +39,9 @@ API_SECRET = "Ck15KLt7d51kmdSuuNniPB3P2xd7Y1GDnrRnMAvFsmtA"
 TELEGRAM_TOKEN = "8464619215:AAGWJGQAOGISayId6d-JZRs63m0hnK5uwt8"
 TELEGRAM_CHAT_ID = "328704848"
 
+# Trades Database File
+TRADES_FILE = "trades_history.json"
+
 TRADING_CONFIG = {
     'initial_capital': 100000,
     'risk_per_trade': 0.02,
@@ -53,6 +57,7 @@ TRANSLATIONS = {
         'app_title': 'لوحة تحكم التداول',
         'dashboard': 'الرئيسية',
         'signals': 'التوصيات',
+        'history': 'سجل الصفقات',
         'analysis': 'التحليل',
         'settings': 'الإعدادات',
         'new_signals': 'إشارات جديدة',
@@ -84,12 +89,24 @@ TRANSLATIONS = {
         'server_status': 'حالة السيرفر',
         'connected': 'متصل',
         'disconnected': 'غير متصل',
-        'error': 'خطأ'
+        'error': 'خطأ',
+        'total_trades': 'إجمالي الصفقات',
+        'winning_trades': 'صفقات رابحة',
+        'losing_trades': 'صفقات خاسرة',
+        'total_profit': 'إجمالي الربح',
+        'pending': 'معلقة',
+        'closed': 'مغلقة',
+        'status': 'الحالة',
+        'result': 'النتيجة',
+        'profit_loss': 'الربح/الخسارة',
+        'close_trade': 'إغلاق الصفقة',
+        'current_price': 'السعر الحالي'
     },
     'en': {
         'app_title': 'Trading Dashboard',
         'dashboard': 'Dashboard',
         'signals': 'Signals',
+        'history': 'Trade History',
         'analysis': 'Analysis',
         'settings': 'Settings',
         'new_signals': 'New Signals',
@@ -121,16 +138,26 @@ TRANSLATIONS = {
         'server_status': 'Server Status',
         'connected': 'Connected',
         'disconnected': 'Disconnected',
-        'error': 'Error'
+        'error': 'Error',
+        'total_trades': 'Total Trades',
+        'winning_trades': 'Winning Trades',
+        'losing_trades': 'Losing Trades',
+        'total_profit': 'Total Profit',
+        'pending': 'Pending',
+        'closed': 'Closed',
+        'status': 'Status',
+        'result': 'Result',
+        'profit_loss': 'P&L',
+        'close_trade': 'Close Trade',
+        'current_price': 'Current Price'
     }
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Custom CSS with Blinking Status
+# Custom CSS
 # ═══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
-    /* Live Clock & Status Bar */
     .status-bar {
         background: linear-gradient(135deg, #0a0a1a 0%, #1a1a3e 100%);
         padding: 15px 25px;
@@ -152,7 +179,6 @@ st.markdown("""
         text-shadow: 0 0 10px rgba(76, 175, 80, 0.5);
     }
     
-    /* Blinking Status Indicators */
     @keyframes blink-green {
         0%, 100% { opacity: 1; box-shadow: 0 0 15px #4CAF50, 0 0 30px #4CAF50; }
         50% { opacity: 0.6; box-shadow: 0 0 5px #4CAF50; }
@@ -184,26 +210,11 @@ st.markdown("""
         display: inline-block;
     }
     
-    .status-dot.green {
-        background: #4CAF50;
-        animation: blink-green 1.5s infinite;
-    }
+    .status-dot.green { background: #4CAF50; animation: blink-green 1.5s infinite; }
+    .status-dot.yellow { background: #FFC107; animation: blink-yellow 1s infinite; }
+    .status-dot.red { background: #f44336; animation: blink-red 0.5s infinite; }
     
-    .status-dot.yellow {
-        background: #FFC107;
-        animation: blink-yellow 1s infinite;
-    }
-    
-    .status-dot.red {
-        background: #f44336;
-        animation: blink-red 0.5s infinite;
-    }
-    
-    .status-text {
-        color: white;
-        font-size: 0.95rem;
-        font-weight: 500;
-    }
+    .status-text { color: white; font-size: 0.95rem; font-weight: 500; }
     
     .main-header {
         font-size: 2.2rem;
@@ -217,30 +228,24 @@ st.markdown("""
         border-bottom: 3px solid #4CAF50;
     }
     
-    .buy-badge {
-        background: #4CAF50;
-        color: white;
-        padding: 5px 15px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
+    .buy-badge { background: #4CAF50; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+    .sell-badge { background: #f44336; color: white; padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+    .telegram-badge { background: #0088cc; color: white; padding: 3px 10px; border-radius: 10px; font-size: 0.75rem; margin-left: 10px; }
     
-    .sell-badge {
-        background: #f44336;
-        color: white;
-        padding: 5px 15px;
-        border-radius: 20px;
-        font-weight: bold;
-    }
+    .profit { color: #4CAF50; font-weight: bold; }
+    .loss { color: #f44336; font-weight: bold; }
     
-    .telegram-badge {
-        background: #0088cc;
-        color: white;
-        padding: 3px 10px;
+    .trade-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         border-radius: 10px;
-        font-size: 0.75rem;
-        margin-left: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        border-left: 4px solid #4CAF50;
     }
+    
+    .trade-card.closed-win { border-left-color: #4CAF50; }
+    .trade-card.closed-loss { border-left-color: #f44336; }
+    .trade-card.pending { border-left-color: #FFC107; }
     
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -258,8 +263,6 @@ if 'last_scan' not in st.session_state:
     st.session_state.last_scan = None
 if 'page' not in st.session_state:
     st.session_state.page = 'dashboard'
-if 'server_status' not in st.session_state:
-    st.session_state.server_status = 'checking'
 if 'telegram_sent' not in st.session_state:
     st.session_state.telegram_sent = []
 if 'startup_sent' not in st.session_state:
@@ -272,10 +275,110 @@ def get_stars(strength):
     return "⭐" * int(strength) + "☆" * (5 - int(strength))
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Trades Database Functions
+# ═══════════════════════════════════════════════════════════════════════════════
+def load_trades():
+    """Load trades from JSON file"""
+    try:
+        if os.path.exists(TRADES_FILE):
+            with open(TRADES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        st.error(f"Error loading trades: {e}")
+    return []
+
+def save_trades(trades):
+    """Save trades to JSON file"""
+    try:
+        with open(TRADES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(trades, f, ensure_ascii=False, indent=2, default=str)
+        return True
+    except Exception as e:
+        st.error(f"Error saving trades: {e}")
+        return False
+
+def add_trade(signal):
+    """Add a new trade from signal"""
+    trades = load_trades()
+    
+    trade = {
+        'id': len(trades) + 1,
+        'symbol': signal['symbol'],
+        'type': signal['type'],
+        'strategy': signal['strategy'],
+        'timeframe': signal['timeframe'],
+        'entry_price': signal['price'],
+        'stop_loss': signal['stop_loss'],
+        'target1': signal['target1'],
+        'target2': signal['target2'],
+        'shares': signal['shares'],
+        'position_value': signal['position_value'],
+        'risk_amount': signal['risk_amount'],
+        'strength': signal['strength'],
+        'entry_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'status': 'pending',  # pending, closed_win, closed_loss
+        'exit_price': None,
+        'exit_date': None,
+        'profit_loss': None,
+        'profit_loss_pct': None,
+        'notes': ''
+    }
+    
+    trades.append(trade)
+    save_trades(trades)
+    return trade
+
+def update_trade(trade_id, exit_price, status, notes=''):
+    """Update trade with exit info"""
+    trades = load_trades()
+    
+    for trade in trades:
+        if trade['id'] == trade_id:
+            trade['exit_price'] = exit_price
+            trade['exit_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            trade['status'] = status
+            trade['notes'] = notes
+            
+            # Calculate P&L
+            if trade['type'] == 'BUY':
+                trade['profit_loss'] = (exit_price - trade['entry_price']) * trade['shares']
+                trade['profit_loss_pct'] = ((exit_price - trade['entry_price']) / trade['entry_price']) * 100
+            else:
+                trade['profit_loss'] = (trade['entry_price'] - exit_price) * trade['shares']
+                trade['profit_loss_pct'] = ((trade['entry_price'] - exit_price) / trade['entry_price']) * 100
+            
+            break
+    
+    save_trades(trades)
+
+def get_trade_stats():
+    """Get trading statistics"""
+    trades = load_trades()
+    
+    closed_trades = [t for t in trades if t['status'] != 'pending']
+    pending_trades = [t for t in trades if t['status'] == 'pending']
+    winning_trades = [t for t in closed_trades if t['status'] == 'closed_win']
+    losing_trades = [t for t in closed_trades if t['status'] == 'closed_loss']
+    
+    total_profit = sum([t.get('profit_loss', 0) or 0 for t in closed_trades])
+    
+    win_rate = (len(winning_trades) / len(closed_trades) * 100) if closed_trades else 0
+    
+    return {
+        'total': len(trades),
+        'pending': len(pending_trades),
+        'closed': len(closed_trades),
+        'wins': len(winning_trades),
+        'losses': len(losing_trades),
+        'win_rate': round(win_rate, 1),
+        'total_profit': round(total_profit, 2)
+    }
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Telegram Functions
 # ═══════════════════════════════════════════════════════════════════════════════
 def send_telegram_message(message):
-    """Send message to Telegram"""
+    """Send message to Telegram with detailed error handling"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {
@@ -283,10 +386,47 @@ def send_telegram_message(message):
             "text": message,
             "parse_mode": "HTML"
         }
-        response = requests.post(url, data=data, timeout=10)
-        return response.status_code == 200
+        response = requests.post(url, data=data, timeout=15)
+        
+        if response.status_code == 200:
+            return True, "تم الإرسال بنجاح"
+        else:
+            result = response.json()
+            error_msg = result.get('description', 'Unknown error')
+            return False, f"خطأ: {error_msg}"
+            
+    except requests.exceptions.Timeout:
+        return False, "انتهت مهلة الاتصال - تأكد من الإنترنت"
+    except requests.exceptions.ConnectionError:
+        return False, "فشل الاتصال - تحقق من الإنترنت"
     except Exception as e:
-        return False
+        return False, f"خطأ غير متوقع: {str(e)}"
+
+def test_telegram():
+    """Test Telegram connection with detailed feedback"""
+    # Step 1: Test bot token
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMe"
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code != 200:
+            return False, "❌ التوكن غير صحيح - تأكد من نسخه بشكل صحيح"
+        
+        bot_info = response.json()
+        bot_name = bot_info.get('result', {}).get('username', 'Unknown')
+        
+    except Exception as e:
+        return False, f"❌ فشل الاتصال: {str(e)}"
+    
+    # Step 2: Try to send message
+    success, msg = send_telegram_message(f"✅ اختبار ناجح!\n\n🤖 البوت: @{bot_name}\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    if success:
+        return True, f"✅ نجح! البوت: @{bot_name}"
+    else:
+        if "chat not found" in msg.lower():
+            return False, f"❌ لم تبدأ محادثة مع البوت.\n\n1️⃣ ابحث عن @{bot_name}\n2️⃣ اضغط Start\n3️⃣ جرب مرة أخرى"
+        return False, msg
 
 def send_signal_to_telegram(signal):
     """Format and send signal to Telegram"""
@@ -313,9 +453,10 @@ def send_signal_to_telegram(signal):
 
 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 ━━━━━━━━━━━━━━━━━━
-🤖 Trading Dashboard
+🤖 Trading Dashboard v3.0
 """
-    return send_telegram_message(message)
+    success, msg = send_telegram_message(message)
+    return success
 
 def send_startup_message():
     """Send startup notification"""
@@ -323,12 +464,14 @@ def send_startup_message():
 🚀 <b>تم تشغيل الداش بورد</b>
 
 ✅ السيرفر يعمل بنجاح
+📊 الإصدار: 3.0
 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 ━━━━━━━━━━━━━━━━━━
-🤖 Trading Dashboard v2.0
+🤖 Trading Dashboard
 """
-    return send_telegram_message(message)
+    success, _ = send_telegram_message(message)
+    return success
 
 # Send startup message once
 if not st.session_state.startup_sent:
@@ -348,13 +491,10 @@ def get_clients():
         return None, None, "error"
 
 def check_server_status():
-    """Check all connections and return status"""
     try:
         data_client, trading_client, status = get_clients()
         if status == "error" or trading_client is None:
             return "red", t('error')
-        
-        # Test API connection
         clock = trading_client.get_clock()
         return "green", t('connected')
     except Exception as e:
@@ -405,6 +545,16 @@ def get_historical_data(symbol, timeframe='1day', days=90):
         return df
     except Exception as e:
         return None
+
+def get_current_price(symbol):
+    """Get current price for a symbol"""
+    try:
+        df = get_historical_data(symbol, '1day', 5)
+        if df is not None and len(df) > 0:
+            return df['close'].iloc[-1]
+    except:
+        pass
+    return None
 
 def get_account_info():
     try:
@@ -516,7 +666,6 @@ def check_signals(df, symbol, timeframe):
         sig['atr'] = atr
         sig['timestamp'] = datetime.now()
         
-        # Calculate targets
         if sig['type'] == 'BUY':
             sig['stop_loss'] = round(price - (2 * atr), 2)
             sig['target1'] = round(price + (3 * atr), 2)
@@ -530,7 +679,6 @@ def check_signals(df, symbol, timeframe):
         sig['target1_pct'] = round(abs(sig['target1'] - price) / price * 100, 2)
         sig['target2_pct'] = round(abs(sig['target2'] - price) / price * 100, 2)
         
-        # Position sizing
         risk_amount = TRADING_CONFIG['initial_capital'] * TRADING_CONFIG['risk_per_trade']
         risk_per_share = abs(price - sig['stop_loss'])
         sig['shares'] = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
@@ -538,7 +686,6 @@ def check_signals(df, symbol, timeframe):
         sig['risk_amount'] = round(risk_amount, 2)
         sig['risk_reward'] = round(TRADING_CONFIG['reward_ratio'], 1)
         
-        # Strength
         strength = 3
         if 'rsi' in df.columns and not pd.isna(df['rsi'].iloc[-1]) and 40 < df['rsi'].iloc[-1] < 60:
             strength += 0.5
@@ -548,7 +695,6 @@ def check_signals(df, symbol, timeframe):
             strength += 0.5
         sig['strength'] = min(5, int(strength))
         
-        # Indicators status
         sig['indicators'] = {}
         if 'rsi' in df.columns and not pd.isna(df['rsi'].iloc[-1]):
             rsi = df['rsi'].iloc[-1]
@@ -563,23 +709,18 @@ def check_signals(df, symbol, timeframe):
     return signals
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Status Bar with Live Clock
+# Status Bar
 # ═══════════════════════════════════════════════════════════════════════════════
 def render_status_bar():
-    """Render the status bar with live clock and server status"""
     status_color, status_text = check_server_status()
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Check market status
     market_open = is_market_open()
     market_color = "green" if market_open else "red"
     market_text = t('market_open') if market_open else t('market_closed')
     
     st.markdown(f"""
     <div class="status-bar">
-        <div class="live-clock">
-            🕐 {current_time}
-        </div>
+        <div class="live-clock">🕐 {current_time}</div>
         <div class="status-indicator">
             <span class="status-dot {status_color}"></span>
             <span class="status-text">{t('server_status')}: {status_text}</span>
@@ -609,11 +750,10 @@ with st.sidebar:
     
     st.markdown("---")
     
-    st.markdown(f"### 📍 {t('dashboard')}")
-    
     pages = {
         'dashboard': f"🏠 {t('dashboard')}",
         'signals': f"🔔 {t('signals')}",
+        'history': f"📋 {t('history')}",
         'analysis': f"📊 {t('analysis')}",
         'settings': f"⚙️ {t('settings')}"
     }
@@ -637,40 +777,37 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Test Telegram Button
+    # Telegram Test
     if st.button("📱 Test Telegram", use_container_width=True):
-        if send_telegram_message("✅ تجربة الاتصال - التيليجرام يعمل بنجاح!"):
-            st.success("✅ تم الإرسال!")
+        success, msg = test_telegram()
+        if success:
+            st.success(msg)
         else:
-            st.error("❌ فشل الإرسال")
+            st.error(msg)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Dashboard Page
 # ═══════════════════════════════════════════════════════════════════════════════
 def show_dashboard():
-    # Status Bar
     render_status_bar()
-    
     st.markdown(f'<div class="main-header">🎯 {t("app_title")}</div>', unsafe_allow_html=True)
     
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
+    # Stats
+    stats = get_trade_stats()
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric(f"🔔 {t('new_signals')}", len(st.session_state.signals))
-    
     with col2:
-        st.metric(f"📈 {t('open_positions')}", 0)
-    
+        st.metric(f"📋 {t('total_trades')}", stats['total'])
     with col3:
-        account = get_account_info()
-        if account:
-            st.metric(f"💰 {t('capital')}", f"${account['equity']:,.0f}")
-        else:
-            st.metric(f"💰 {t('capital')}", "$100,000")
-    
+        st.metric(f"⏳ {t('pending')}", stats['pending'])
     with col4:
-        st.metric(f"🎯 {t('win_rate')}", "--")
+        st.metric(f"🎯 {t('win_rate')}", f"{stats['win_rate']}%")
+    with col5:
+        profit_color = "normal" if stats['total_profit'] >= 0 else "inverse"
+        st.metric(f"💰 {t('total_profit')}", f"${stats['total_profit']:,.0f}", delta_color=profit_color)
     
     st.markdown("---")
     
@@ -690,6 +827,7 @@ def show_dashboard():
     
     with col3:
         send_telegram = st.checkbox("📱 Telegram", value=True)
+        save_trades_opt = st.checkbox("💾 حفظ", value=True)
     
     if scan_btn:
         with st.spinner(f"🔄 {t('loading')}"):
@@ -709,23 +847,30 @@ def show_dashboard():
                         continue
                 progress.progress((i + 1) / len(TOP_STOCKS))
             
-            # Send to Telegram
             telegram_count = 0
-            if send_telegram and signals:
-                for sig in signals:
-                    sig_key = f"{sig['symbol']}_{sig['strategy']}_{sig['timeframe']}"
-                    if sig_key not in st.session_state.telegram_sent:
-                        if send_signal_to_telegram(sig):
-                            st.session_state.telegram_sent.append(sig_key)
-                            sig['telegram_sent'] = True
-                            telegram_count += 1
+            saved_count = 0
+            
+            for sig in signals:
+                sig_key = f"{sig['symbol']}_{sig['strategy']}_{sig['timeframe']}"
+                
+                # Save to database
+                if save_trades_opt:
+                    add_trade(sig)
+                    saved_count += 1
+                
+                # Send to Telegram
+                if send_telegram and sig_key not in st.session_state.telegram_sent:
+                    if send_signal_to_telegram(sig):
+                        st.session_state.telegram_sent.append(sig_key)
+                        sig['telegram_sent'] = True
+                        telegram_count += 1
             
             st.session_state.signals = signals
             st.session_state.last_scan = datetime.now()
             progress.empty()
             
             if signals:
-                st.success(f"✅ تم العثور على {len(signals)} إشارة! 📱 تم إرسال {telegram_count} للتيليجرام")
+                st.success(f"✅ {len(signals)} إشارة | 💾 {saved_count} محفوظ | 📱 {telegram_count} تيليجرام")
             st.rerun()
     
     st.markdown("---")
@@ -734,24 +879,8 @@ def show_dashboard():
     if not st.session_state.signals:
         st.info(f"ℹ️ {t('no_signals')} - Press '{t('scan_now')}' to search")
     else:
-        buy_signals = [s for s in st.session_state.signals if s['type'] == 'BUY']
-        sell_signals = [s for s in st.session_state.signals if s['type'] == 'SELL']
-        
-        tab1, tab2, tab3 = st.tabs([f"🟢 {t('buy')} ({len(buy_signals)})", 
-                                     f"🔴 {t('sell')} ({len(sell_signals)})",
-                                     f"📋 {t('all')} ({len(st.session_state.signals)})"])
-        
-        with tab1:
-            for sig in buy_signals[:10]:
-                render_signal_card(sig)
-        
-        with tab2:
-            for sig in sell_signals[:10]:
-                render_signal_card(sig)
-        
-        with tab3:
-            for sig in st.session_state.signals[:15]:
-                render_signal_card(sig)
+        for sig in st.session_state.signals[:10]:
+            render_signal_card(sig)
 
 def render_signal_card(signal):
     is_buy = signal['type'] == 'BUY'
@@ -767,7 +896,6 @@ def render_signal_card(signal):
             st.markdown(f"### {emoji} {signal['symbol']} {telegram_badge}", unsafe_allow_html=True)
             st.markdown(f'<span class="{badge}">{signal_text}</span>', unsafe_allow_html=True)
             st.markdown(f"**{t('strategy')}:** {signal['strategy']}")
-            st.markdown(f"**{t('timeframe')}:** {signal['timeframe']}")
             st.markdown(f"**{t('signal_strength')}:** {get_stars(signal['strength'])}")
         
         with col2:
@@ -775,30 +903,95 @@ def render_signal_card(signal):
             **{t('entry_price')}:** ${signal['price']:.2f}  
             **{t('stop_loss')}:** ${signal['stop_loss']:.2f} (-{signal['stop_loss_pct']:.1f}%)  
             **{t('target')} 1:** ${signal['target1']:.2f} (+{signal['target1_pct']:.1f}%)  
-            **{t('target')} 2:** ${signal['target2']:.2f} (+{signal['target2_pct']:.1f}%)  
-            **R:R:** 1:{signal['risk_reward']:.1f}
+            **{t('target')} 2:** ${signal['target2']:.2f} (+{signal['target2_pct']:.1f}%)
             """)
         
         with col3:
             st.markdown(f"""
             **{t('shares')}:** {signal['shares']}  
-            **{t('position_size')}:** ${signal['position_value']:,.0f}  
-            **{t('risk_per_trade')}:** ${signal['risk_amount']:.0f}
+            **{t('position_size')}:** ${signal['position_value']:,.0f}
             """)
         
-        with st.expander(f"📊 {t('supporting_indicators')}"):
-            ind = signal.get('indicators', {})
-            cols = st.columns(4)
-            if 'rsi' in ind:
-                cols[0].metric("RSI", ind['rsi']['value'], ind['rsi']['status'])
-            if 'macd' in ind:
-                cols[1].metric("MACD", ind['macd']['value'], ind['macd']['status'])
-            if 'volume' in ind:
-                cols[2].metric(t('volume'), ind['volume']['value'], ind['volume']['status'])
-            if 'adx' in ind:
-                cols[3].metric("ADX", ind['adx']['value'], ind['adx']['status'])
-        
         st.markdown("---")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Trade History Page
+# ═══════════════════════════════════════════════════════════════════════════════
+def show_history():
+    render_status_bar()
+    st.title(f"📋 {t('history')}")
+    
+    trades = load_trades()
+    stats = get_trade_stats()
+    
+    # Stats Row
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric(t('total_trades'), stats['total'])
+    col2.metric(t('pending'), stats['pending'])
+    col3.metric(t('winning_trades'), stats['wins'])
+    col4.metric(t('losing_trades'), stats['losses'])
+    col5.metric(t('win_rate'), f"{stats['win_rate']}%")
+    
+    st.markdown("---")
+    
+    # Filter
+    filter_status = st.selectbox(
+        t('status'),
+        ['all', 'pending', 'closed_win', 'closed_loss'],
+        format_func=lambda x: t('all') if x == 'all' else t('pending') if x == 'pending' else '✅ ربح' if x == 'closed_win' else '❌ خسارة'
+    )
+    
+    filtered_trades = trades
+    if filter_status != 'all':
+        filtered_trades = [t for t in trades if t['status'] == filter_status]
+    
+    # Display trades
+    if not filtered_trades:
+        st.info("لا توجد صفقات")
+        return
+    
+    for trade in reversed(filtered_trades[-20:]):  # Last 20
+        status_class = 'pending' if trade['status'] == 'pending' else 'closed-win' if trade['status'] == 'closed_win' else 'closed-loss'
+        
+        with st.expander(f"{'🟢' if trade['type'] == 'BUY' else '🔴'} {trade['symbol']} - {trade['strategy']} - {trade['entry_date'][:10]}"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.markdown(f"""
+                **{t('entry_price')}:** ${trade['entry_price']:.2f}  
+                **{t('stop_loss')}:** ${trade['stop_loss']:.2f}  
+                **{t('target')} 1:** ${trade['target1']:.2f}  
+                **{t('shares')}:** {trade['shares']}
+                """)
+            
+            with col2:
+                if trade['status'] == 'pending':
+                    current_price = get_current_price(trade['symbol'])
+                    if current_price:
+                        pnl = (current_price - trade['entry_price']) * trade['shares'] if trade['type'] == 'BUY' else (trade['entry_price'] - current_price) * trade['shares']
+                        pnl_class = 'profit' if pnl >= 0 else 'loss'
+                        st.markdown(f"**{t('current_price')}:** ${current_price:.2f}")
+                        st.markdown(f"**P&L:** <span class='{pnl_class}'>${pnl:+,.2f}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{t('status')}:** ⏳ {t('pending')}")
+                else:
+                    st.markdown(f"**Exit:** ${trade['exit_price']:.2f}")
+                    pnl_class = 'profit' if trade['profit_loss'] >= 0 else 'loss'
+                    st.markdown(f"**P&L:** <span class='{pnl_class}'>${trade['profit_loss']:+,.2f} ({trade['profit_loss_pct']:+.1f}%)</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{t('status')}:** {'✅ ربح' if trade['status'] == 'closed_win' else '❌ خسارة'}")
+            
+            with col3:
+                if trade['status'] == 'pending':
+                    exit_price = st.number_input(f"سعر الخروج", value=float(trade['entry_price']), key=f"exit_{trade['id']}")
+                    
+                    col_win, col_loss = st.columns(2)
+                    with col_win:
+                        if st.button("✅ ربح", key=f"win_{trade['id']}"):
+                            update_trade(trade['id'], exit_price, 'closed_win')
+                            st.rerun()
+                    with col_loss:
+                        if st.button("❌ خسارة", key=f"loss_{trade['id']}"):
+                            update_trade(trade['id'], exit_price, 'closed_loss')
+                            st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Signals Page
@@ -811,7 +1004,6 @@ def show_signals():
         st.info(t('no_signals'))
         return
     
-    # Table view
     df = pd.DataFrame([{
         t('stocks'): s['symbol'],
         'Type': s['type'],
@@ -819,15 +1011,10 @@ def show_signals():
         t('entry_price'): f"${s['price']:.2f}",
         t('stop_loss'): f"${s['stop_loss']:.2f}",
         t('target'): f"${s['target1']:.2f}",
-        t('signal_strength'): get_stars(s['strength']),
-        '📱': '✅' if s.get('telegram_sent') else ''
+        t('signal_strength'): get_stars(s['strength'])
     } for s in st.session_state.signals])
     
     st.dataframe(df, use_container_width=True, hide_index=True)
-    
-    st.markdown("---")
-    for sig in st.session_state.signals:
-        render_signal_card(sig)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Analysis Page
@@ -836,20 +1023,40 @@ def show_analysis():
     render_status_bar()
     st.title(f"📊 {t('analysis')}")
     
-    st.subheader("⭐ Top Stocks")
-    st.write(", ".join(TOP_STOCKS))
+    trades = load_trades()
+    closed_trades = [t for t in trades if t['status'] != 'pending']
+    
+    if closed_trades:
+        # Performance by Strategy
+        st.subheader("📈 أداء الاستراتيجيات")
+        
+        strategy_stats = {}
+        for trade in closed_trades:
+            strat = trade['strategy']
+            if strat not in strategy_stats:
+                strategy_stats[strat] = {'wins': 0, 'losses': 0, 'profit': 0}
+            
+            if trade['status'] == 'closed_win':
+                strategy_stats[strat]['wins'] += 1
+            else:
+                strategy_stats[strat]['losses'] += 1
+            strategy_stats[strat]['profit'] += trade.get('profit_loss', 0) or 0
+        
+        strat_df = pd.DataFrame([
+            {
+                'Strategy': k,
+                'Wins': v['wins'],
+                'Losses': v['losses'],
+                'Win Rate': f"{v['wins']/(v['wins']+v['losses'])*100:.0f}%" if v['wins']+v['losses'] > 0 else "0%",
+                'Profit': f"${v['profit']:,.0f}"
+            }
+            for k, v in strategy_stats.items()
+        ])
+        st.dataframe(strat_df, use_container_width=True, hide_index=True)
     
     st.markdown("---")
-    
-    st.subheader("📈 Strategies")
-    strategies = [
-        {'Strategy': 'MA Crossover', 'Win Rate': '55%', 'Avg Return': '7.5%'},
-        {'Strategy': 'MACD', 'Win Rate': '52%', 'Avg Return': '5.5%'},
-        {'Strategy': 'RSI Reversal', 'Win Rate': '50%', 'Avg Return': '5.0%'},
-        {'Strategy': 'Stochastic', 'Win Rate': '53%', 'Avg Return': '6.0%'},
-        {'Strategy': 'Bollinger Bounce', 'Win Rate': '48%', 'Avg Return': '4.5%'}
-    ]
-    st.dataframe(pd.DataFrame(strategies), use_container_width=True, hide_index=True)
+    st.subheader("⭐ Top Stocks")
+    st.write(", ".join(TOP_STOCKS))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Settings Page
@@ -861,21 +1068,29 @@ def show_settings():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader(f"💰 {t('capital')}")
-        st.number_input(t('capital'), value=100000, min_value=1000, max_value=10000000, step=1000)
+        st.subheader("💰 Trading")
+        st.number_input(t('capital'), value=100000, min_value=1000, step=1000)
         st.slider(t('risk_per_trade'), 0.5, 5.0, 2.0, 0.5, format="%.1f%%")
-        st.slider("Reward:Risk", 1.0, 5.0, 2.5, 0.5)
     
     with col2:
-        st.subheader("📱 Telegram")
-        st.text_input("Bot Token", value=TELEGRAM_TOKEN[:20] + "...", disabled=True)
+        st.subheader("📱 Telegram Test")
+        st.text_input("Token", value=TELEGRAM_TOKEN[:25] + "...", disabled=True)
         st.text_input("Chat ID", value=TELEGRAM_CHAT_ID, disabled=True)
         
-        if st.button("📱 Send Test Message"):
-            if send_telegram_message("✅ تجربة الإعدادات - التيليجرام يعمل!"):
-                st.success("✅ تم الإرسال بنجاح!")
-            else:
-                st.error("❌ فشل الإرسال")
+        if st.button("🧪 اختبار كامل"):
+            with st.spinner("جاري الاختبار..."):
+                success, msg = test_telegram()
+                if success:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+                    st.info("""
+                    **خطوات إصلاح التيليجرام:**
+                    1. افتح تيليجرام
+                    2. ابحث عن البوت باستخدام التوكن
+                    3. اضغط /start
+                    4. جرب مرة أخرى
+                    """)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main Router
@@ -884,6 +1099,8 @@ if st.session_state.page == 'dashboard':
     show_dashboard()
 elif st.session_state.page == 'signals':
     show_signals()
+elif st.session_state.page == 'history':
+    show_history()
 elif st.session_state.page == 'analysis':
     show_analysis()
 elif st.session_state.page == 'settings':
@@ -893,7 +1110,7 @@ elif st.session_state.page == 'settings':
 st.markdown("---")
 st.markdown(
     f"<div style='text-align: center; color: #666;'>"
-    f"Trading Dashboard v2.0 | 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ⚠️ للأغراض التعليمية فقط"
+    f"Trading Dashboard v3.0 | 🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     f"</div>",
     unsafe_allow_html=True
 )
