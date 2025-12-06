@@ -267,6 +267,8 @@ if 'telegram_sent' not in st.session_state:
     st.session_state.telegram_sent = []
 if 'startup_sent' not in st.session_state:
     st.session_state.startup_sent = False
+if 'last_refresh_time' not in st.session_state:
+    st.session_state.last_refresh_time = datetime.now()
 
 def t(key):
     return TRANSLATIONS.get(st.session_state.lang, {}).get(key, key)
@@ -473,10 +475,11 @@ def send_startup_message():
     success, _ = send_telegram_message(message)
     return success
 
-# Send startup message once
-if not st.session_state.startup_sent:
-    send_startup_message()
-    st.session_state.startup_sent = True
+# Auto-refresh every 10 seconds - updates clock and status only
+time_diff = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
+if time_diff >= 10:
+    st.session_state.last_refresh_time = datetime.now()
+    st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Data Fetcher
@@ -718,6 +721,10 @@ def render_status_bar():
     market_color = "green" if market_open else "red"
     market_text = t('market_open') if market_open else t('market_closed')
     
+    # Calculate time until next refresh
+    time_since_refresh = (datetime.now() - st.session_state.last_refresh_time).total_seconds()
+    next_refresh = max(0, 10 - int(time_since_refresh))
+    
     st.markdown(f"""
     <div class="status-bar">
         <div class="live-clock">🕐 {current_time}</div>
@@ -728,6 +735,9 @@ def render_status_bar():
         <div class="status-indicator">
             <span class="status-dot {market_color}"></span>
             <span class="status-text">{market_text}</span>
+        </div>
+        <div class="status-indicator">
+            <span class="status-text">🔄 {next_refresh}s</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -812,7 +822,7 @@ def show_dashboard():
     st.markdown("---")
     
     # Scan Controls
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3, col4 = st.columns([1, 2, 1, 1])
     
     with col1:
         scan_btn = st.button(f"🔍 {t('scan_now')}", use_container_width=True, type="primary")
@@ -826,8 +836,26 @@ def show_dashboard():
         )
     
     with col3:
-        send_telegram = st.checkbox("📱 Telegram", value=True)
         save_trades_opt = st.checkbox("💾 حفظ", value=True)
+    
+    with col4:
+        send_telegram_btn = st.button("📱 إرسال تيليجرام", use_container_width=True)
+    
+    # Send existing signals to Telegram manually
+    if send_telegram_btn and st.session_state.signals:
+        telegram_count = 0
+        for sig in st.session_state.signals:
+            sig_key = f"{sig['symbol']}_{sig['strategy']}_{sig['timeframe']}"
+            if sig_key not in st.session_state.telegram_sent:
+                if send_signal_to_telegram(sig):
+                    st.session_state.telegram_sent.append(sig_key)
+                    sig['telegram_sent'] = True
+                    telegram_count += 1
+        if telegram_count > 0:
+            st.success(f"📱 تم إرسال {telegram_count} توصية للتيليجرام!")
+        else:
+            st.info("جميع التوصيات مرسلة مسبقاً")
+        st.rerun()
     
     if scan_btn:
         with st.spinner(f"🔄 {t('loading')}"):
@@ -847,30 +875,20 @@ def show_dashboard():
                         continue
                 progress.progress((i + 1) / len(TOP_STOCKS))
             
-            telegram_count = 0
             saved_count = 0
             
             for sig in signals:
-                sig_key = f"{sig['symbol']}_{sig['strategy']}_{sig['timeframe']}"
-                
-                # Save to database
+                # Save to database only (no auto telegram)
                 if save_trades_opt:
                     add_trade(sig)
                     saved_count += 1
-                
-                # Send to Telegram
-                if send_telegram and sig_key not in st.session_state.telegram_sent:
-                    if send_signal_to_telegram(sig):
-                        st.session_state.telegram_sent.append(sig_key)
-                        sig['telegram_sent'] = True
-                        telegram_count += 1
             
             st.session_state.signals = signals
             st.session_state.last_scan = datetime.now()
             progress.empty()
             
             if signals:
-                st.success(f"✅ {len(signals)} إشارة | 💾 {saved_count} محفوظ | 📱 {telegram_count} تيليجرام")
+                st.success(f"✅ {len(signals)} إشارة | 💾 {saved_count} محفوظ | 📱 اضغط 'إرسال تيليجرام' للإرسال")
             st.rerun()
     
     st.markdown("---")
